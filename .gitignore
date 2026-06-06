@@ -1,0 +1,7 @@
+node_modules/
+dist/
+downloads/
+*.log
+.env
+.env.*
+project.md
