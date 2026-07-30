@@ -70,6 +70,42 @@ html, body {
   height: 38px;
   z-index: 1000;
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 12px;
+}
+.titlebar-right-actions {
+  -webkit-app-region: no-drag;
+  pointer-events: all;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.btn-call {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  height: 28px;
+  border-radius: 20px;
+  background: rgba(45, 127, 249, 0.15);
+  border: 1px solid rgba(45, 127, 249, 0.3);
+  color: var(--accent-light);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-call svg { width: 14px; height: 14px; }
+.btn-call:hover:not(:disabled) {
+  background: rgba(45, 127, 249, 0.3);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.btn-call:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .app-container,
 .sidebar,
@@ -155,6 +191,7 @@ html, body {
 .nav-item.active {
   background: var(--accent-dim);
   color: var(--accent-light);
+  box-shadow: inset 0 0 20px rgba(45, 127, 249, 0.08);
 }
 .nav-item.active::before {
   content: '';
@@ -224,6 +261,20 @@ html, body {
 .disconnect-btn:hover {
   background: var(--red-dim) !important;
 }
+.call-btn {
+  color: var(--accent-light) !important;
+  background: var(--accent-dim) !important;
+  border: 1px solid rgba(45, 127, 249, 0.2);
+}
+.call-btn:hover:not(:disabled) {
+  background: rgba(45, 127, 249, 0.25) !important;
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+.call-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .main-content {
   flex: 1;
   overflow-y: auto;
@@ -234,13 +285,15 @@ html, body {
 .page {
   display: none;
   padding: 32px 40px;
-  animation: fadeSlideIn 0.3s ease;
   min-height: 100%;
 }
-.page.active { display: block; }
-@keyframes fadeSlideIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
+.page.active {
+  display: block;
+  animation: pageEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pageEnter {
+  from { opacity: 0; transform: translateY(16px) scale(0.99); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 .page-header {
   margin-bottom: 32px;
@@ -264,11 +317,12 @@ html, body {
   border-radius: var(--radius);
   padding: 28px;
   box-shadow: var(--shadow-md);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, border-color 0.25s ease;
 }
 .glass-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg), 0 0 30px rgba(45, 127, 249, 0.08);
+  border-color: rgba(100, 150, 255, 0.28);
 }
 .home-grid {
   display: grid;
@@ -480,12 +534,15 @@ html, body {
   border: none;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.2s;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
   box-shadow: 0 2px 10px var(--accent-glow);
 }
 .btn-send:hover {
-  transform: scale(1.05);
-  box-shadow: 0 4px 16px var(--accent-glow);
+  transform: scale(1.12) rotate(8deg);
+  box-shadow: 0 6px 20px var(--accent-glow);
+}
+.btn-send:active {
+  transform: scale(0.95) rotate(0deg);
 }
 .btn-send:disabled {
   opacity: 0.4;
@@ -525,6 +582,19 @@ html, body {
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+/* Green glow burst when connected */
+.connected-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(30, 215, 96, 0.12) 0%, transparent 65%);
+  animation: glowBurst 0.8s ease forwards;
+  pointer-events: none;
+}
+@keyframes glowBurst {
+  from { opacity: 0; transform: scale(0.5); }
+  to { opacity: 1; transform: scale(1); }
 }
 .connected-card {
   text-align: center;
@@ -611,6 +681,13 @@ html, body {
   color: var(--text-dim);
   gap: 8px;
 }
+.chat-empty svg {
+  animation: iconBreathe 3s ease-in-out infinite;
+}
+@keyframes iconBreathe {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.06); }
+}
 .chat-empty .sub { font-size: 13px; }
 .chat-bubble {
   max-width: 75%;
@@ -620,6 +697,26 @@ html, body {
   line-height: 1.5;
   word-wrap: break-word;
   animation: bubbleIn 0.25s ease;
+}
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 18px;
+  min-height: 44px;
+}
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  animation: typingBounce 1.4s infinite ease-in-out both;
+}
+.typing-dot:nth-child(1) { animation-delay: -0.32s; }
+.typing-dot:nth-child(2) { animation-delay: -0.16s; }
+@keyframes typingBounce {
+  0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
+  40% { transform: scale(1); opacity: 1; }
 }
 @keyframes bubbleIn {
   from { opacity: 0; transform: translateY(8px) scale(0.96); }
@@ -642,6 +739,20 @@ html, body {
   font-size: 11px;
   margin-top: 6px;
   opacity: 0.6;
+}
+.chat-image-container {
+  margin-bottom: 4px;
+}
+.chat-image {
+  max-width: 100%;
+  max-height: 250px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: transform 0.2s;
+  display: block;
+}
+.chat-image:hover {
+  transform: scale(1.02);
 }
 .chat-input-bar {
   display: flex;
@@ -703,6 +814,11 @@ html, body {
   color: var(--text-dim);
   opacity: 0.5;
   transition: all 0.3s;
+  animation: dropIconFloat 3s ease-in-out infinite;
+}
+@keyframes dropIconFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
 }
 .drop-zone.dragover .drop-zone-inner svg {
   color: var(--accent-light);
@@ -771,9 +887,24 @@ html, body {
 }
 .file-progress-fill {
   height: 100%;
-  background: var(--accent-gradient);
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 60%, #a0d0ff 100%);
   border-radius: 2px;
   transition: width 0.3s ease;
+  box-shadow: 0 0 8px var(--accent-glow);
+  position: relative;
+  overflow: hidden;
+}
+.file-progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%; bottom: 0;
+  width: 60%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  animation: progressShimmer 1.6s infinite;
+}
+@keyframes progressShimmer {
+  from { left: -60%; }
+  to { left: 120%; }
 }
 .file-actions {
   display: flex;
@@ -848,4 +979,123 @@ html, body {
   .badge { position: absolute; top: 4px; right: 4px; }
   .page { padding: 20px; }
 }
+/* Call Overlay */
+.call-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 11, 24, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+}
+.call-overlay.hidden { display: none !important; }
+.call-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+#remoteVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #111;
+}
+#localVideo {
+  position: absolute;
+  bottom: 120px;
+  right: 40px;
+  width: 200px;
+  height: 150px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  background: #222;
+  box-shadow: var(--shadow-lg);
+  transform: scaleX(-1);
+  z-index: 5;
+  transition: all 0.3s ease;
+}
+#localVideo.fullscreen {
+  width: 100%;
+  height: 100%;
+  bottom: 0; right: 0;
+  border: none; border-radius: 0;
+  z-index: 4;
+}
+.call-ui {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  padding: 40px;
+  background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 10;
+}
+.call-status {
+  font-size: 18px;
+  font-weight: 500;
+  color: white;
+  margin-bottom: 24px;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+.call-controls {
+  display: flex;
+  gap: 24px;
+}
+.btn-call-control {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  border: none;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+.btn-call-control:hover { 
+  background: rgba(255, 255, 255, 0.25); 
+  transform: scale(1.05); 
+}
+.btn-call-control.end-call { background: var(--red); }
+.btn-call-control.end-call:hover { background: #ff5e6d; box-shadow: 0 0 16px rgba(231,76,90,0.4); }
+.btn-call-control.accept-call { background: var(--green); }
+.btn-call-control.accept-call:hover { background: #28e06a; box-shadow: 0 0 16px rgba(30,215,96,0.4); }
+.btn-call-control svg { width: 28px; height: 28px; }
+.btn-call-control.muted {
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text-inverse);
+}
+
+/* Ping Indicator */
+.ping-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+.ping-indicator.hidden { display: none !important; }
+.ping-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  box-shadow: 0 0 8px currentColor;
+}
+.ping-good .ping-dot { background: var(--green); color: var(--green); }
+.ping-warn .ping-dot { background: var(--yellow); color: var(--yellow); }
+.ping-bad .ping-dot { background: var(--red); color: var(--red); }
+
 .hidden { display: none !important; }

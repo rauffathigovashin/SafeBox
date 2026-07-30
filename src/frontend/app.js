@@ -7,8 +7,23 @@ const AppState = {
   unreadCount: 0,
   codeExpiresAt: null,
   timerInterval: null,
-  fileTransfers: new Map()
+  fileTransfers: new Map(),
+  typingTimeout: null,
+  lastTypingTime: 0,
+  pendingOffer: null
 };
+let rtcPeerConnection = null;
+let localStream = null;
+let remoteStream = null;
+const rtcConfig = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
+let isAudioMuted = false;
+let isVideoMuted = false;
+
 const $ = id => document.getElementById(id);
 const dom = {
   navItems: document.querySelectorAll('.nav-item[data-page]'),
@@ -31,6 +46,20 @@ const dom = {
   chatEmpty: $('chatEmpty'),
   chatInput: $('chatInput'),
   chatSendBtn: $('chatSendBtn'),
+  pingIndicator: $('pingIndicator'),
+  pingText: $('pingText'),
+  startCallBtn: $('startCallBtn'),
+  callOverlay: $('callOverlay'),
+  localVideo: $('localVideo'),
+  remoteVideo: $('remoteVideo'),
+  callStatusText: $('callStatusText'),
+  activeCallControls: $('activeCallControls'),
+  incomingCallControls: $('incomingCallControls'),
+  toggleMicBtn: $('toggleMicBtn'),
+  toggleVideoBtn: $('toggleVideoBtn'),
+  endCallBtn: $('endCallBtn'),
+  acceptCallBtn: $('acceptCallBtn'),
+  rejectCallBtn: $('rejectCallBtn'),
   dropZone: $('dropZone'),
   fileInput: $('fileInput'),
   browseFilesBtn: $('browseFilesBtn'),
@@ -96,6 +125,9 @@ function handleServerMessage(msg) {
     case 'chat-message':
       addChatMessage(msg.data);
       break;
+    case 'peer-typing':
+      showTypingIndicator();
+      break;
     case 'file-offer':
       showIncomingFile(msg.data);
       break;
@@ -119,6 +151,19 @@ function handleServerMessage(msg) {
     case 'file-receive-complete':
       updateFileComplete(msg.data.fileId, msg.data.verified ? 'Received ✓' : 'Received (unverified)');
       showToast(`File received: ${msg.data.fileName}`, 'success');
+      if (isImage(msg.data.fileName)) {
+        addChatImage({
+          from: 'peer',
+          src: `/api/downloads/${encodeURIComponent(msg.data.fileName)}`,
+          timestamp: Date.now()
+        });
+      }
+      break;
+    case 'rtc-signal':
+      handleRtcSignal(msg.data);
+      break;
+    case 'ping-update':
+      updatePing(msg.data.ms);
       break;
     case 'peer-error':
       showToast(`Error: ${msg.data.message}`, 'error');
@@ -139,6 +184,7 @@ function setConnected(remoteAddress) {
   dom.connectedInfo.textContent = `Connected to ${remoteAddress || 'peer'}`;
   dom.chatInput.disabled = false;
   dom.chatSendBtn.disabled = false;
+  dom.startCallBtn.disabled = false;
   setTimeout(() => {
     dom.connectedOverlay.classList.add('hidden');
   }, 3000);
@@ -150,8 +196,22 @@ function setDisconnected(reason) {
   dom.connectedOverlay.classList.add('hidden');
   dom.chatInput.disabled = true;
   dom.chatSendBtn.disabled = true;
+  dom.startCallBtn.disabled = true;
+  if (dom.pingIndicator) dom.pingIndicator.classList.add('hidden');
+  endCall(false);
   showToast(reason || 'Disconnected', 'info');
 }
+
+function updatePing(ms) {
+  if (!dom.pingIndicator) return;
+  dom.pingIndicator.classList.remove('hidden');
+  dom.pingText.textContent = `${ms} ms`;
+  dom.pingIndicator.className = 'ping-indicator';
+  if (ms < 100) dom.pingIndicator.classList.add('ping-good');
+  else if (ms < 300) dom.pingIndicator.classList.add('ping-warn');
+  else dom.pingIndicator.classList.add('ping-bad');
+}
+
 function updateCodeDisplay(data) {
   if (data.code) {
     dom.codeText.textContent = data.code;
@@ -208,6 +268,9 @@ function capitalize(s) {
 }
 function addChatMessage(data) {
   dom.chatEmpty.style.display = 'none';
+  const typingEl = document.getElementById('typingIndicator');
+  if (typingEl) typingEl.remove();
+
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${data.from === 'me' ? 'me' : 'peer'}`;
   const time = new Date(data.timestamp).toLocaleTimeString([], {
@@ -224,6 +287,40 @@ function addChatMessage(data) {
     showToast(`New message: ${data.text.slice(0, 50)}`, 'info');
   }
 }
+
+function isImage(fileName) {
+  if (!fileName) return false;
+  const ext = fileName.split('.').pop().toLowerCase();
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+}
+
+function addChatImage(data) {
+  dom.chatEmpty.style.display = 'none';
+  const typingEl = document.getElementById('typingIndicator');
+  if (typingEl) typingEl.remove();
+
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble ${data.from === 'me' ? 'me' : 'peer'}`;
+  const time = new Date(data.timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  bubble.innerHTML = `
+    <div class="chat-image-container">
+      <img src="${data.src}" class="chat-image" alt="Image preview" onload="scrollChatToBottom()">
+    </div>
+    <span class="timestamp">${time}</span>
+  `;
+  dom.chatMessages.appendChild(bubble);
+  scrollChatToBottom();
+  
+  if (AppState.currentPage !== 'chat' && data.from === 'peer') {
+    AppState.unreadCount++;
+    dom.chatBadge.textContent = AppState.unreadCount;
+    dom.chatBadge.classList.remove('hidden');
+    showToast('New image received', 'info');
+  }
+}
 function sendChatMessage() {
   const text = dom.chatInput.value.trim();
   if (!text || !AppState.connected) return;
@@ -233,6 +330,25 @@ function sendChatMessage() {
   dom.chatInput.value = '';
   dom.chatInput.focus();
 }
+
+function showTypingIndicator() {
+  let el = document.getElementById('typingIndicator');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'typingIndicator';
+    el.className = 'typing-indicator chat-bubble peer';
+    el.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+    dom.chatMessages.appendChild(el);
+  }
+  scrollChatToBottom();
+  
+  if (AppState.typingTimeout) clearTimeout(AppState.typingTimeout);
+  AppState.typingTimeout = setTimeout(() => {
+    const el = document.getElementById('typingIndicator');
+    if (el) el.remove();
+  }, 3000);
+}
+
 function scrollChatToBottom() {
   requestAnimationFrame(() => {
     dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
@@ -244,6 +360,14 @@ function handleFileDrop(files) {
     return;
   }
   for (const file of files) {
+    if (isImage(file.name)) {
+      addChatImage({
+        from: 'me',
+        src: URL.createObjectURL(file),
+        timestamp: Date.now()
+      });
+    }
+
     if (file.path) {
       send('send-file', {
         fileName: file.name,
@@ -377,6 +501,173 @@ function formatFileSize(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
+
+// --- WebRTC Logic ---
+async function startCall() {
+  if (!AppState.connected) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    showCallUI('Calling...', true);
+    
+    rtcPeerConnection = new RTCPeerConnection(rtcConfig);
+    
+    localStream.getTracks().forEach(track => {
+      rtcPeerConnection.addTrack(track, localStream);
+    });
+
+    rtcPeerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        send('send-rtc-signal', { type: 'candidate', candidate: event.candidate });
+      }
+    };
+
+    rtcPeerConnection.ontrack = (event) => {
+      remoteStream = event.streams[0];
+      dom.remoteVideo.srcObject = remoteStream;
+    };
+
+    const offer = await rtcPeerConnection.createOffer();
+    await rtcPeerConnection.setLocalDescription(offer);
+    send('send-rtc-signal', { type: 'offer', offer });
+    
+  } catch (err) {
+    showToast('Failed to access camera/mic: ' + err.message, 'error');
+  }
+}
+
+async function handleRtcSignal(data) {
+  if (data.type === 'offer') {
+    showIncomingCallUI();
+    try {
+      rtcPeerConnection = new RTCPeerConnection(rtcConfig);
+      rtcPeerConnection.onicecandidate = (event) => {
+        if (event.candidate) send('send-rtc-signal', { type: 'candidate', candidate: event.candidate });
+      };
+      rtcPeerConnection.ontrack = (event) => {
+        remoteStream = event.streams[0];
+        dom.remoteVideo.srcObject = remoteStream;
+      };
+      await rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+      AppState.pendingOffer = data.offer;
+    } catch (err) {
+      console.error('Error handling offer:', err);
+    }
+  } else if (data.type === 'answer') {
+    if (rtcPeerConnection) {
+      await rtcPeerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      dom.callStatusText.textContent = 'Connected';
+    }
+  } else if (data.type === 'candidate') {
+    if (rtcPeerConnection) {
+      try {
+        await rtcPeerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (err) {
+        console.error('Error adding candidate:', err);
+      }
+    }
+  } else if (data.type === 'end') {
+    endCall(false);
+  }
+}
+
+async function acceptCall() {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStream.getTracks().forEach(track => {
+      rtcPeerConnection.addTrack(track, localStream);
+    });
+
+    const answer = await rtcPeerConnection.createAnswer();
+    await rtcPeerConnection.setLocalDescription(answer);
+    send('send-rtc-signal', { type: 'answer', answer });
+    
+    showActiveCallUI();
+  } catch (err) {
+    showToast('Failed to access camera/mic: ' + err.message, 'error');
+    rejectCall();
+  }
+}
+
+function rejectCall() {
+  send('send-rtc-signal', { type: 'end' });
+  endCall(false);
+}
+
+function endCall(sendSignal = true) {
+  if (sendSignal && AppState.connected) {
+    send('send-rtc-signal', { type: 'end' });
+  }
+  
+  if (rtcPeerConnection) {
+    rtcPeerConnection.close();
+    rtcPeerConnection = null;
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  
+  dom.callOverlay.classList.add('hidden');
+  dom.localVideo.srcObject = null;
+  dom.remoteVideo.srcObject = null;
+  AppState.pendingOffer = null;
+}
+
+function showCallUI(statusText, isInitiator) {
+  dom.callOverlay.classList.remove('hidden');
+  dom.callStatusText.textContent = statusText;
+  
+  if (localStream) {
+    dom.localVideo.srcObject = localStream;
+  }
+
+  dom.activeCallControls.style.display = 'flex';
+  dom.incomingCallControls.style.display = 'none';
+  
+  isVideoMuted = false;
+  isAudioMuted = false;
+  dom.toggleMicBtn.classList.remove('muted');
+  dom.toggleVideoBtn.classList.remove('muted');
+}
+
+function showIncomingCallUI() {
+  dom.callOverlay.classList.remove('hidden');
+  dom.callStatusText.textContent = 'Incoming Call...';
+  dom.activeCallControls.style.display = 'none';
+  dom.incomingCallControls.style.display = 'flex';
+  dom.localVideo.srcObject = null;
+}
+
+function showActiveCallUI() {
+  dom.callStatusText.textContent = 'Connected';
+  dom.activeCallControls.style.display = 'flex';
+  dom.incomingCallControls.style.display = 'none';
+  if (localStream) {
+    dom.localVideo.srcObject = localStream;
+  }
+}
+
+dom.startCallBtn.addEventListener('click', startCall);
+dom.acceptCallBtn.addEventListener('click', acceptCall);
+dom.rejectCallBtn.addEventListener('click', rejectCall);
+dom.endCallBtn.addEventListener('click', () => endCall(true));
+
+dom.toggleMicBtn.addEventListener('click', () => {
+  if (localStream) {
+    isAudioMuted = !isAudioMuted;
+    localStream.getAudioTracks().forEach(t => t.enabled = !isAudioMuted);
+    dom.toggleMicBtn.classList.toggle('muted', isAudioMuted);
+  }
+});
+
+dom.toggleVideoBtn.addEventListener('click', () => {
+  if (localStream) {
+    isVideoMuted = !isVideoMuted;
+    localStream.getVideoTracks().forEach(t => t.enabled = !isVideoMuted);
+    dom.toggleVideoBtn.classList.toggle('muted', isVideoMuted);
+  }
+});
+
 dom.navItems.forEach(item => {
   item.addEventListener('click', () => navigateTo(item.dataset.page));
 });
@@ -409,6 +700,14 @@ dom.disconnectBtn.addEventListener('click', () => {
 dom.chatSendBtn.addEventListener('click', sendChatMessage);
 dom.chatInput.addEventListener('keypress', e => {
   if (e.key === 'Enter') sendChatMessage();
+});
+dom.chatInput.addEventListener('input', () => {
+  if (!AppState.connected) return;
+  const now = Date.now();
+  if (now - AppState.lastTypingTime > 2000) {
+    send('send-typing');
+    AppState.lastTypingTime = now;
+  }
 });
 dom.dropZone.addEventListener('dragover', e => {
   e.preventDefault();

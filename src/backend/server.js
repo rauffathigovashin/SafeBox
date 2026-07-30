@@ -30,6 +30,9 @@ const MIME = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
@@ -97,6 +100,15 @@ function setupPeerEvents(peer) {
       text: msg.text,
       timestamp: msg.timestamp
     });
+  });
+  peer.on('typing', () => {
+    broadcast('peer-typing');
+  });
+  peer.on('rtc-signal', data => {
+    broadcast('rtc-signal', data);
+  });
+  peer.on('ping', ms => {
+    broadcast('ping-update', { ms });
   });
   peer.on('file-offer', offer => {
     state.pendingFileOffers.set(offer.fileId, offer);
@@ -252,40 +264,55 @@ function handleWSMessage(ws, message) {
         }
         break;
       }
+    case 'send-typing':
+      {
+        if (state.peer && state.peer.connected) {
+          state.peer.sendTyping();
+        }
+        break;
+      }
+    case 'send-rtc-signal':
+      {
+        if (state.peer && state.peer.connected) {
+          state.peer.sendRtcSignal(msg.data);
+        }
+        break;
+      }
     case 'send-file':
       {
         if (state.peer && state.peer.connected && msg.fileName && msg.filePath) {
-          const filePath = msg.filePath;
-          if (!fs.existsSync(filePath)) {
-            ws.send(JSON.stringify({
-              type: 'file-error',
-              data: {
-                message: 'File not found'
+          const startSend = (name, p) => {
+            if (!fs.existsSync(p)) return;
+            const stats = fs.statSync(p);
+            if (stats.isDirectory()) {
+              const items = fs.readdirSync(p);
+              for (const item of items) {
+                startSend(name + '/' + item, path.join(p, item));
               }
-            }));
-            return;
-          }
-          const stats = fs.statSync(filePath);
-          const fileId = crypto.randomUUID();
-          const readStream = fs.createReadStream(filePath, {
-            highWaterMark: 64 * 1024
-          });
-          const hash = crypto.createHash('sha256');
-          readStream.on('data', chunk => hash.update(chunk));
-          readStream.destroy();
-          state.activeFileTransfers.set(fileId, {
-            readStream: null,
-            fileName: msg.fileName,
-            fileSize: stats.size,
-            filePath,
-            hash: crypto.createHash('sha256')
-          });
-          state.peer.sendFileOffer(fileId, msg.fileName, stats.size);
-          broadcast('file-offered', {
-            fileId,
-            fileName: msg.fileName,
-            fileSize: stats.size
-          });
+            } else {
+              const fileId = crypto.randomUUID();
+              const readStream = fs.createReadStream(p, {
+                highWaterMark: 64 * 1024
+              });
+              const hash = crypto.createHash('sha256');
+              readStream.on('data', chunk => hash.update(chunk));
+              readStream.destroy();
+              state.activeFileTransfers.set(fileId, {
+                readStream: null,
+                fileName: name,
+                fileSize: stats.size,
+                filePath: p,
+                hash: crypto.createHash('sha256')
+              });
+              state.peer.sendFileOffer(fileId, name, stats.size);
+              broadcast('file-offered', {
+                fileId,
+                fileName: name,
+                fileSize: stats.size
+              });
+            }
+          };
+          startSend(msg.fileName, msg.filePath);
         }
         break;
       }
@@ -314,8 +341,10 @@ function handleWSMessage(ws, message) {
       {
         const offer = state.pendingFileOffers.get(msg.fileId);
         if (offer && state.peer && state.peer.connected) {
-          const safeFileName = offer.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+          let normalized = offer.fileName.replace(/\\/g, '/').replace(/(^|\/)\.\.(?=\/|$)/g, '');
+          const safeFileName = normalized.replace(/[^a-zA-Z0-9.\/_-]/g, '_');
           const filePath = path.join(DOWNLOADS_DIR, safeFileName);
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
           const writeStream = fs.createWriteStream(filePath);
           state.activeFileTransfers.set(msg.fileId, {
             writeStream,
@@ -388,6 +417,25 @@ function handleFileAcceptForBuffer(fileId) {
   }
 }
 const httpServer = http.createServer((req, res) => {
+  if (req.url.startsWith('/api/downloads/')) {
+    const filename = decodeURIComponent(req.url.substring('/api/downloads/'.length));
+    const safePath = path.normalize(filename).replace(/^(\.\.[\/\\])+/, '');
+    const absPath = path.join(DOWNLOADS_DIR, safePath);
+    
+    fs.readFile(absPath, (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        res.end('Not Found');
+        return;
+      }
+      const ext = path.extname(absPath).toLowerCase();
+      const cType = MIME[ext] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': cType });
+      res.end(data);
+    });
+    return;
+  }
+
   let filePath = req.url === '/' ? '/index.html' : req.url;
   filePath = path.join(FRONTEND_DIR, filePath);
   const ext = path.extname(filePath);

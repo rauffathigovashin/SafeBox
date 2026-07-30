@@ -17,7 +17,9 @@ const MSG = {
   FILE_COMPLETE: 0x24,
   HEARTBEAT_PING: 0x30,
   HEARTBEAT_PONG: 0x31,
-  DISCONNECT: 0xF0
+  RTC_SIGNAL: 0x40,
+  DISCONNECT: 0xF0,
+  TYPING_INDICATOR: 0x12
 };
 const MAX_FRAME_SIZE = 50 * 1024 * 1024;
 function buildFrame(type, payload) {
@@ -133,11 +135,25 @@ class SafeBoxPeer extends EventEmitter {
         this.sendEncrypted(MSG.HEARTBEAT_PONG, Buffer.alloc(0));
         break;
       case MSG.HEARTBEAT_PONG:
-        this._onHeartbeatPong();
+        if (this._heartbeatTimeout) {
+          clearTimeout(this._heartbeatTimeout);
+          this._heartbeatTimeout = null;
+        }
+        this.lastHeartbeat = Date.now();
+        if (this.lastPingTime) {
+          const pingMs = Date.now() - this.lastPingTime;
+          this.emit('ping', pingMs);
+        }
         break;
       case MSG.DISCONNECT:
         this.emit('peer-disconnect');
         this._cleanup();
+        break;
+      case MSG.TYPING_INDICATOR:
+        this.emit('typing');
+        break;
+      case MSG.RTC_SIGNAL:
+        this.emit('rtc-signal', JSON.parse(payload.toString()));
         break;
       default:
         break;
@@ -182,24 +198,25 @@ class SafeBoxPeer extends EventEmitter {
   _startHeartbeat() {
     this._heartbeatInterval = setInterval(() => {
       if (!this.connected) return;
+      this.lastPingTime = Date.now();
       this.sendEncrypted(MSG.HEARTBEAT_PING, Buffer.alloc(0));
       this._heartbeatTimeout = setTimeout(() => {
         this.emit('heartbeat-timeout');
         this.disconnect();
       }, 15000);
-    }, 30000);
-  }
-  _onHeartbeatPong() {
-    if (this._heartbeatTimeout) {
-      clearTimeout(this._heartbeatTimeout);
-      this._heartbeatTimeout = null;
-    }
+    }, 5000);
   }
   sendChat(text) {
     this.sendEncrypted(MSG.CHAT_MESSAGE, {
       text,
       timestamp: Date.now()
     });
+  }
+  sendTyping() {
+    this.sendEncrypted(MSG.TYPING_INDICATOR, Buffer.alloc(0));
+  }
+  sendRtcSignal(data) {
+    this.sendEncrypted(MSG.RTC_SIGNAL, Buffer.from(JSON.stringify(data)));
   }
   sendFileOffer(fileId, fileName, fileSize) {
     this.sendEncrypted(MSG.FILE_OFFER, {
